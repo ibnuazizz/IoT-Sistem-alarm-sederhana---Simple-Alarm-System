@@ -1,0 +1,174 @@
+#include <Keypad.h>
+#include <LiquidCrystal_I2C.h>
+
+// LCD setup
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// Pin assignments
+const int buzzerPin = A0;
+const int pirPin = 2;
+
+// PIN code (fixed for now)
+String storedPIN = "1234";
+String inputCode = "";
+
+// System states
+bool isArmed = false;
+bool disarmCountdown = false;
+bool exitDelayActive = false;
+
+unsigned long entryStartTime;
+unsigned long exitStartTime;
+const int entryDelay = 15000; // 15 seconds
+const int exitDelay = 10000;  // 10 seconds
+
+// Timing for buzzer
+unsigned long lastBeepTime = 0;
+
+// Keypad setup
+const byte ROWS = 4;
+const byte COLS = 4;
+char keys[ROWS][COLS] = {
+  {'1','2','3','A'},
+  {'4','5','6','B'},
+  {'7','8','9','C'},
+  {'*','0','#','D'}
+};
+byte rowPins[ROWS] = {10, 9, 8, 7};
+byte colPins[COLS] = {6, 5, 4, 3};
+Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
+
+void beep(int duration = 100) {
+  tone(buzzerPin, 1000);
+  delay(duration);
+  noTone(buzzerPin);
+}
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(pirPin, INPUT);
+  pinMode(buzzerPin, OUTPUT);
+
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print("Enter PIN:");
+}
+
+void loop() {
+  char key = keypad.getKey();
+
+  if (key) {
+    beep();
+    handleKeyInput(key);
+  }
+
+  // Exit delay logic
+  if (exitDelayActive) {
+    unsigned long elapsed = millis() - exitStartTime;
+    if (elapsed >= exitDelay) {
+      isArmed = true;
+      exitDelayActive = false;
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("System ARMED");
+    } else {
+      lcd.setCursor(0, 0);
+      lcd.print("Arming: ");
+      lcd.print((exitDelay - elapsed) / 1000);
+      lcd.print("s    ");
+
+      if (millis() - lastBeepTime >= 1000) {
+        lastBeepTime = millis();
+        beep(100);
+      }
+    }
+  }
+
+  // Entry delay logic
+  if (disarmCountdown) {
+    unsigned long elapsed = millis() - entryStartTime;
+    int remaining = (entryDelay - elapsed) / 1000;
+
+    if (elapsed >= entryDelay) {
+      disarmCountdown = false;
+      soundAlarm();
+    } else {
+      lcd.setCursor(0, 0);
+      lcd.print("Motion Detected! ");
+      lcd.setCursor(0, 1);
+      lcd.print("Disarm: ");
+      lcd.print(remaining);
+      lcd.print("s    ");
+
+      if (millis() - lastBeepTime >= 1000) {
+        lastBeepTime = millis();
+        beep(100);
+      }
+    }
+  }
+
+  // PIR detection when armed
+  if (isArmed && digitalRead(pirPin) == HIGH && !disarmCountdown) {
+    disarmCountdown = true;
+    entryStartTime = millis();
+    lastBeepTime = 0;
+    lcd.clear();
+  }
+}
+
+void soundAlarm() {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("!! ALARM !!");
+  for (int i = 0; i < 10; i++) {
+    tone(buzzerPin, 2000);
+    delay(200);
+    noTone(buzzerPin);
+    delay(200);
+  }
+}
+
+void handleKeyInput(char key) {
+  if (key == '#') {
+    checkPIN();
+  } else if (key == '*') {
+    inputCode = "";
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("PIN cleared");
+  } else if (inputCode.length() < 4 && isDigit(key)) {
+    inputCode += key;
+    lcd.setCursor(0, 0);
+    lcd.print("Code: ");
+    lcd.print(inputCode);
+    lcd.print("    ");
+  }
+}
+
+void checkPIN() {
+  if (inputCode == storedPIN) {
+    // Disarm system in any state
+    if (disarmCountdown || exitDelayActive || isArmed) {
+      disarmCountdown = false;
+      exitDelayActive = false;
+      isArmed = false;
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("System DISARMED");
+    } else {
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Arming in 10s...");
+      exitDelayActive = true;
+      exitStartTime = millis();
+      lastBeepTime = 0;
+    }
+  } else {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Wrong PIN!");
+  }
+
+  inputCode = "";
+}
